@@ -1,21 +1,3 @@
-"""
-CANable Driver Module
-=====================
-A Python object-oriented driver for CANable USB-to-CAN adapters.
-This module provides a high-level interface to interact with CANable devices.
-
-The CANable is a low-cost, open-source USB-to-CAN adapter using candleLight 
-firmware. This driver uses the Candle API (gs_usb) for direct USB communication 
-via libusb, providing better performance than SLCAN.
-
-Requires: libusb-1.0.dll (Windows) or libusb-1.0 (Linux/Mac)
-
-Author: GitHub Copilot
-Date: October 10, 2025
-"""
-
-from enum import Enum
-from dataclasses import dataclass
 from typing import Optional, List, Callable
 import time
 import threading
@@ -24,33 +6,11 @@ import sys
 import asyncio
 import inspect
 
+from can import Bus, Message
+import usb.core
+import usb.util
 
-try:
-    from can import Bus, Message
-except ImportError:
-    print("Error: python-can library not found. Install with: pip install python-can")
-    raise
-
-try:
-    import usb.core
-    import usb.util
-except ImportError:
-    print("Warning: pyusb library not found. Install with: pip install pyusb")
-    print("         This is required for USB device enumeration.")
-    usb = None
-
-
-class CANableBaudRate(Enum):
-    """Standard CAN baud rates for CANable"""
-    BAUD_1M = 1000000
-    BAUD_800K = 800000
-    BAUD_500K = 500000
-    BAUD_250K = 250000
-    BAUD_125K = 125000
-    BAUD_100K = 100000
-    BAUD_50K = 50000
-    BAUD_20K = 20000
-    BAUD_10K = 10000
+from Drivers.BaseDriver import BaseCANDriver, CANBaudRate, CANMessage
 
 
 # USB Vendor/Product IDs for CANable devices with candleLight firmware
@@ -65,31 +25,7 @@ GS_USB_DEVICES = [
 ]
 
 
-@dataclass
-class CANMessage:
-    """
-    Represents a CAN message with all relevant information.
-    """
-    id: int
-    data: bytes
-    timestamp: float = 0.0
-    is_extended: bool = False
-    is_remote: bool = False
-    is_error: bool = False
-    is_fd: bool = False
-    dlc: int = 0
-    
-    def __post_init__(self):
-        if self.dlc == 0:
-            self.dlc = len(self.data)
-    
-    def __str__(self):
-        msg_type = "EXT" if self.is_extended else "STD"
-        data_str = ' '.join([f'{b:02X}' for b in self.data])
-        return f"ID: 0x{self.id:X} [{msg_type}] DLC: {self.dlc} Data: [{data_str}]"
-
-
-class CANableDriver:
+class CANableDriver(BaseCANDriver):
     """
     Object-oriented driver for CANable USB-to-CAN adapters using Candle API.
     
@@ -622,7 +558,6 @@ class CANableDriver:
             print(f"✗ Failed to clear queue: {str(e)}")
             return False
     
-    @property
     def is_connected(self) -> bool:
         """Check if connected to a CANable device."""
         return self._is_connected

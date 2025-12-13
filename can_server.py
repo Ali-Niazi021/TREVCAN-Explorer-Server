@@ -1,19 +1,3 @@
-"""
-CAN Bus HTTP Server
-====================
-An HTTP server that provides a REST API for CAN bus communication.
-Supports both real hardware via CANable_Driver and a simulation/test mode.
-
-Features:
-- REST API for sending and receiving CAN messages
-- Server-Sent Events for real-time message streaming
-- Test mode with simulated CAN traffic
-- JSON-based message format for easy integration
-
-Author: GitHub Copilot
-Date: December 2025
-"""
-
 import json
 import asyncio
 import threading
@@ -30,20 +14,10 @@ from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import urllib.parse
+import cantools
 
-# Import cantools for DBC file parsing
-try:
-    import cantools
-except ImportError:
-    print("Warning: cantools not installed. DBC decoding will not be available.")
-    cantools = None
-
-# Import the CANable driver
-try:
-    from CANable_Driver import CANableDriver, CANableBaudRate, CANMessage
-except ImportError:
-    print("Error: CANable_Driver.py not found in the same directory")
-    raise
+from Drivers.BaseDriver import CANMessage, CANBaudRate
+from Drivers.CANable_Driver import CANableDriver
 
 
 # ============================================================================
