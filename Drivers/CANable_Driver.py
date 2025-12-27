@@ -42,7 +42,7 @@ class CANableDriver(BaseCANDriver):
     Example:
         >>> driver = CANableDriver()
         >>> devices = driver.get_available_devices()
-        >>> driver.connect(0, CANableBaudRate.BAUD_500K)  # Connect to first device
+        >>> driver.connect(0, CANBaudRate.BAUD_500K)  # Connect to first device
         >>> driver.send_message(0x123, b'\\x01\\x02\\x03\\x04')
         >>> msg = driver.read_message()
         >>> driver.disconnect()
@@ -52,7 +52,7 @@ class CANableDriver(BaseCANDriver):
         """Initialize the CANable driver."""
         self._bus: Optional[Bus] = None
         self._channel: Optional[int] = None  # Now an integer index
-        self._baudrate: Optional[CANableBaudRate] = None
+        self._baudrate: Optional[CANBaudRate] = None
         self._is_connected: bool = False
         self._receive_thread: Optional[threading.Thread] = None
         self._receive_callback: Optional[Callable[[CANMessage], None]] = None
@@ -156,7 +156,7 @@ class CANableDriver(BaseCANDriver):
         except:
             pass
     
-    def connect(self, channel: int, baudrate: CANableBaudRate, 
+    def connect(self, channel: int, baudrate: CANBaudRate, 
                 fd_mode: bool = False) -> bool:
         """
         Connect to a CANable device using gs_usb/Candle API.
@@ -164,7 +164,7 @@ class CANableDriver(BaseCANDriver):
         Args:
             channel: Device index (0 for first device, 1 for second, etc.)
                     Use get_available_devices() to see available indices.
-            baudrate: CAN bus baudrate (e.g., CANableBaudRate.BAUD_500K)
+            baudrate: CAN bus baudrate (e.g., CANBaudRate.BAUD_500K)
             fd_mode: Enable CAN FD mode (default: False) - may not be supported
         
         Returns:
@@ -568,7 +568,7 @@ class CANableDriver(BaseCANDriver):
         return self._channel
     
     @property
-    def baudrate(self) -> Optional[CANableBaudRate]:
+    def baudrate(self) -> Optional[CANBaudRate]:
         """Get the current baudrate."""
         return self._baudrate
     
@@ -622,7 +622,7 @@ if __name__ == "__main__":
     print("\n2. Connecting to device...")
     channel_index = 0  # Use first device
     
-    if driver.connect(channel_index, CANableBaudRate.BAUD_500K):
+    if driver.connect(channel_index, CANBaudRate.BAUD_500K):
         print(f"✓ Successfully connected!")
         
         # Get bus status

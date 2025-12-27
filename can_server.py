@@ -16,8 +16,15 @@ from socketserver import ThreadingMixIn
 import urllib.parse
 import cantools
 
-from Drivers.BaseDriver import CANMessage, CANBaudRate
+from Drivers.BaseDriver import BaseCANDriver, CANMessage, CANBaudRate
 from Drivers.CANable_Driver import CANableDriver
+from Drivers.PiWaveshare2ChCAN_Driver import PiWaveshare2ChCAN_Driver
+
+# Available driver types
+DRIVER_TYPES = {
+    'canable': CANableDriver,
+    'waveshare': PiWaveshare2ChCAN_Driver,
+}
 
 
 # ============================================================================
@@ -503,11 +510,16 @@ class CANSimulator:
 class CANBusManager:
     """
     Manages CAN bus communication, supporting both real hardware and simulation.
+    
+    Supported drivers:
+        - 'canable': CANable USB-to-CAN adapter (default)
+        - 'waveshare': Waveshare 2-CH Isolated CAN HAT for Raspberry Pi
     """
     
-    def __init__(self, test_mode: bool = False):
+    def __init__(self, test_mode: bool = False, driver_type: str = 'canable'):
         self.test_mode = test_mode
-        self._driver: Optional[CANableDriver] = None
+        self.driver_type = driver_type
+        self._driver: Optional[BaseCANDriver] = None
         self._simulator: Optional[CANSimulator] = None
         self._message_buffer: deque = deque(maxlen=1000)
         self._lock = threading.Lock()
@@ -518,11 +530,22 @@ class CANBusManager:
             self._simulator = CANSimulator()
             print("✓ CAN Bus Manager initialized in TEST MODE (no hardware)")
         else:
-            self._driver = CANableDriver()
-            print("✓ CAN Bus Manager initialized for HARDWARE mode")
+            # Initialize the selected driver
+            if driver_type not in DRIVER_TYPES:
+                raise ValueError(f"Unknown driver type: {driver_type}. Available: {list(DRIVER_TYPES.keys())}")
+            
+            driver_class = DRIVER_TYPES[driver_type]
+            
+            # Waveshare driver takes channel in constructor, CANable doesn't
+            if driver_type == 'waveshare':
+                self._driver = driver_class(channel=0)
+            else:
+                self._driver = driver_class()
+            
+            print(f"✓ CAN Bus Manager initialized for HARDWARE mode (driver: {driver_type})")
     
     def connect(self, channel: int = 0, 
-                baudrate: CANableBaudRate = CANableBaudRate.BAUD_500K) -> bool:
+                baudrate: CANBaudRate = CANBaudRate.BAUD_500K) -> bool:
         """Connect to CAN bus (hardware or start simulation)."""
         if self.test_mode:
             self._simulator.start(callback=self._on_message_received)
@@ -886,11 +909,11 @@ class CANServerHandler(BaseHTTPRequestHandler):
         
         # Parse baudrate
         try:
-            baudrate = CANableBaudRate[baudrate_str]
+            baudrate = CANBaudRate[baudrate_str]
         except KeyError:
             self._send_error(
                 f"Invalid baudrate: {baudrate_str}. "
-                f"Valid options: {[b.name for b in CANableBaudRate]}"
+                f"Valid options: {[b.name for b in CANBaudRate]}"
             )
             return
         
@@ -1118,8 +1141,11 @@ Examples:
   # Start in test mode (no hardware required)
   python can_server.py --test
   
-  # Start with real hardware
+  # Start with CANable adapter (default)
   python can_server.py --channel 0 --baudrate 500000
+  
+  # Start with Waveshare 2-CH CAN HAT on Raspberry Pi
+  python can_server.py --driver waveshare --channel 0 --baudrate 500000
   
   # Start on custom port
   python can_server.py --test --port 8080
@@ -1166,24 +1192,32 @@ Examples:
         help="Automatically connect to CAN bus on startup"
     )
     
+    parser.add_argument(
+        "--driver", "-d",
+        type=str,
+        default="canable",
+        choices=list(DRIVER_TYPES.keys()),
+        help="CAN driver to use (default: canable). Options: canable, waveshare"
+    )
+    
     args = parser.parse_args()
     
-    # Create CAN bus manager
-    can_manager = CANBusManager(test_mode=args.test)
+    # Create CAN bus manager with selected driver
+    can_manager = CANBusManager(test_mode=args.test, driver_type=args.driver)
     CANServerHandler.can_manager = can_manager
     
     # Auto-connect if requested
     if args.auto_connect:
         # Find baudrate enum
         baudrate = None
-        for br in CANableBaudRate:
+        for br in CANBaudRate:
             if br.value == args.baudrate:
                 baudrate = br
                 break
         
         if baudrate is None:
             print(f"⚠ Invalid baudrate {args.baudrate}, using 500K")
-            baudrate = CANableBaudRate.BAUD_500K
+            baudrate = CANBaudRate.BAUD_500K
         
         print(f"\nAuto-connecting to CAN bus...")
         if not can_manager.connect(args.channel, baudrate):

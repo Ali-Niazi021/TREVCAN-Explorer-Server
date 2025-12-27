@@ -1,3 +1,30 @@
-python-can>=4.0.0
-pyusb>=1.2.0
-cantools>=39.0.0
+# =============================================================================
+# TREV-Explorer-Server Dependencies
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Core CAN Communication
+# -----------------------------------------------------------------------------
+python-can>=4.0.0          # CAN bus interface library (required for all drivers)
+cantools>=39.0.0           # DBC file parsing and CAN message decoding
+
+# -----------------------------------------------------------------------------
+# CANable Driver Dependencies (USB-to-CAN adapter)
+# -----------------------------------------------------------------------------
+pyusb>=1.2.0               # USB communication for CANable/gs_usb devices
+# Note: On Windows, libusb-1.0.dll must be in project directory
+# Note: On Linux, may need: sudo usermod -a -G plugdev $USER
+
+# -----------------------------------------------------------------------------
+# Waveshare 2-CH CAN HAT Dependencies (Raspberry Pi)
+# -----------------------------------------------------------------------------
+# No additional pip packages required - uses SocketCAN via python-can
+# 
+# Hardware setup required:
+#   1. Enable SPI: sudo raspi-config -> Interface Options -> SPI -> Enable
+#   2. Add to /boot/firmware/config.txt:
+#        dtparam=spi=on
+#        dtoverlay=mcp2515-can1,oscillator=16000000,interrupt=25
+#        dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=23
+#   3. Reboot the Raspberry Pi
+#   4. Bring up interfaces: sudo ip link set can0 up type can bitrate 500000
