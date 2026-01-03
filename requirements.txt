@@ -28,3 +28,14 @@ pyusb>=1.2.0               # USB communication for CANable/gs_usb devices
 #        dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=23
 #   3. Reboot the Raspberry Pi
 #   4. Bring up interfaces: sudo ip link set can0 up type can bitrate 500000
+
+# -----------------------------------------------------------------------------
+# PCAN Driver Dependencies (PEAK PCAN-USB adapters)
+# -----------------------------------------------------------------------------
+# python-can[pcan]         # Optional: Install PCAN support for python-can
+# 
+# Requirements:
+#   - PCAN-USB adapter from PEAK-System
+#   - PCAN Basic API drivers installed
+#   - On Windows: PCAN-Basic API DLL (included with PEAK drivers)
+#   - On Linux: PCAN driver module (peak-linux-driver)

@@ -7,6 +7,7 @@ import argparse
 import os
 import sys
 import socket
+import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Callable, Any
 from dataclasses import dataclass, asdict
@@ -19,12 +20,75 @@ import cantools
 from Drivers.BaseDriver import BaseCANDriver, CANMessage, CANBaudRate
 from Drivers.CANable_Driver import CANableDriver
 from Drivers.PiWaveshare2ChCAN_Driver import PiWaveshare2ChCAN_Driver
+from Drivers.PCAN_Driver import PCANDriver
 
 # Available driver types
 DRIVER_TYPES = {
     'canable': CANableDriver,
     'waveshare': PiWaveshare2ChCAN_Driver,
+    'pcan': PCANDriver,
 }
+
+
+# ============================================================================
+# Shared Message Buffer (Multi-Client Support)
+# ============================================================================
+
+class MessageBuffer:
+    """
+    Thread-safe shared message buffer for all clients.
+    
+    All clients read from the same buffer. Messages are not consumed when read,
+    allowing multiple clients to see the same messages. Clients can use timestamps
+    to track which messages they've already processed.
+    
+    The buffer is a ring buffer - oldest messages are discarded when full.
+    """
+    
+    def __init__(self, max_size: int = 5000):
+        self._buffer: deque = deque(maxlen=max_size)
+        self._lock = threading.Lock()
+        self._client_count = 0  # Track number of active clients (informational)
+    
+    def add_message(self, msg: CANMessage):
+        """Add a message to the buffer (thread-safe)."""
+        with self._lock:
+            self._buffer.append(msg)
+    
+    def get_messages(self, count: int = 100, filter_id: Optional[int] = None) -> List[CANMessage]:
+        """
+        Get messages from buffer (non-destructive read).
+        Returns the most recent 'count' messages.
+        All clients see the same messages.
+        """
+        with self._lock:
+            messages = list(self._buffer)
+        
+        if filter_id is not None:
+            messages = [m for m in messages if m.id == filter_id]
+        
+        return messages[-count:]
+    
+    def clear(self):
+        """Clear all messages from the buffer."""
+        with self._lock:
+            self._buffer.clear()
+    
+    @property
+    def size(self) -> int:
+        """Current number of messages in buffer."""
+        return len(self._buffer)
+    
+    def get_stats(self) -> dict:
+        """Get buffer statistics."""
+        return {
+            "buffer_size": len(self._buffer),
+            "max_size": self._buffer.maxlen
+        }
+
+
+# Global shared message buffer
+message_buffer = MessageBuffer()
 
 
 # ============================================================================
@@ -511,9 +575,16 @@ class CANBusManager:
     """
     Manages CAN bus communication, supporting both real hardware and simulation.
     
+    Multi-client architecture:
+    - CAN hardware is shared between all clients
+    - All received messages are stored in a shared MessageBuffer
+    - Any client can read messages (non-destructive reads)
+    - Messages have timestamps for ordering
+    
     Supported drivers:
         - 'canable': CANable USB-to-CAN adapter (default)
         - 'waveshare': Waveshare 2-CH Isolated CAN HAT for Raspberry Pi
+        - 'pcan': PEAK PCAN-USB adapter
     """
     
     def __init__(self, test_mode: bool = False, driver_type: str = 'canable'):
@@ -521,10 +592,10 @@ class CANBusManager:
         self.driver_type = driver_type
         self._driver: Optional[BaseCANDriver] = None
         self._simulator: Optional[CANSimulator] = None
-        self._message_buffer: deque = deque(maxlen=1000)
         self._lock = threading.Lock()
         self._connected = False
         self._message_callbacks: List[Callable[[CANMessage], None]] = []
+        self._tx_lock = threading.Lock()  # Lock for transmitting messages
         
         if test_mode:
             self._simulator = CANSimulator()
@@ -574,33 +645,34 @@ class CANBusManager:
     
     def send_message(self, can_id: int, data: bytes, 
                      is_extended: bool = False) -> bool:
-        """Send a CAN message."""
+        """
+        Send a CAN message (thread-safe).
+        Multiple clients can call this simultaneously - TX is serialized.
+        """
         if not self._connected:
             return False
         
-        if self.test_mode:
-            return self._simulator.send_message(can_id, data, is_extended)
-        else:
-            return self._driver.send_message(can_id, data, is_extended)
+        with self._tx_lock:
+            if self.test_mode:
+                return self._simulator.send_message(can_id, data, is_extended)
+            else:
+                return self._driver.send_message(can_id, data, is_extended)
     
     def get_messages(self, count: int = 100, 
                      filter_id: Optional[int] = None) -> List[CANMessageJSON]:
-        """Get recent messages from the buffer."""
-        with self._lock:
-            messages = list(self._message_buffer)
+        """
+        Get recent messages from the shared buffer.
         
-        if filter_id is not None:
-            messages = [m for m in messages if m.id == filter_id]
-        
-        # Return most recent messages
-        messages = messages[-count:]
-        
+        All clients read from the same buffer. Messages are not consumed,
+        so multiple clients can see the same messages. Clients can use
+        timestamps to track which messages they've already processed.
+        """
+        messages = message_buffer.get_messages(count, filter_id)
         return [CANMessageJSON.from_can_message(m) for m in messages]
     
     def clear_buffer(self):
         """Clear the message buffer."""
-        with self._lock:
-            self._message_buffer.clear()
+        message_buffer.clear()
     
     def add_callback(self, callback: Callable[[CANMessage], None]):
         """Add a callback for received messages."""
@@ -612,10 +684,14 @@ class CANBusManager:
             self._message_callbacks.remove(callback)
     
     def _on_message_received(self, msg: CANMessage):
-        """Internal callback for received messages."""
-        with self._lock:
-            self._message_buffer.append(msg)
+        """
+        Internal callback for received messages.
+        Adds message to the shared buffer.
+        """
+        # Add to shared buffer (all clients see the same messages)
+        message_buffer.add_message(msg)
         
+        # Call any registered callbacks (for SSE streams, etc.)
         for callback in self._message_callbacks:
             try:
                 callback(msg)
@@ -627,8 +703,8 @@ class CANBusManager:
         status = {
             "connected": self._connected,
             "mode": "test/simulation" if self.test_mode else "hardware",
-            "buffer_size": len(self._message_buffer),
-            "buffer_capacity": self._message_buffer.maxlen
+            "driver": self.driver_type,
+            "buffer": message_buffer.get_stats()
         }
         
         if not self.test_mode and self._driver:
@@ -647,7 +723,7 @@ class CANBusManager:
 # ============================================================================
 
 class CANServerHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for CAN bus API."""
+    """HTTP request handler for CAN bus API with multi-client support."""
     
     # Class-level reference to CAN bus manager
     can_manager: Optional[CANBusManager] = None
@@ -772,8 +848,9 @@ class CANServerHandler(BaseHTTPRequestHandler):
         """Handle root endpoint - API info."""
         self._send_json({
             "name": "CAN Bus HTTPS Server",
-            "version": "1.0.0",
-            "description": "REST API for CAN bus communication",
+            "version": "2.0.0",
+            "description": "REST API for CAN bus communication with multi-client support",
+            "multi_client": True,
             "endpoints": {
                 "GET /": "API information",
                 "GET /api/status": "Get server and CAN bus status",
@@ -787,6 +864,11 @@ class CANServerHandler(BaseHTTPRequestHandler):
                 "POST /api/messages/batch": "Send multiple CAN messages",
                 "DELETE /api/messages": "Clear message buffer",
                 "DELETE /api/dbc": "Unload DBC file"
+            },
+            "usage": {
+                "basic": "All clients read from a shared message buffer",
+                "streaming": "Use /api/messages/stream for real-time SSE events",
+                "filtering": "Use filter_id parameter to filter by message ID"
             },
             "mode": "test" if self.can_manager.test_mode else "hardware"
         })
@@ -819,7 +901,12 @@ class CANServerHandler(BaseHTTPRequestHandler):
             })
     
     def _handle_get_messages(self, params: dict):
-        """Handle getting messages."""
+        """
+        Handle getting messages (non-destructive read from shared buffer).
+        
+        All clients read from the same shared message buffer.
+        Messages have timestamps for ordering.
+        """
         if not self.can_manager.is_connected:
             self._send_error("Not connected to CAN bus", 400)
             return
@@ -873,7 +960,11 @@ class CANServerHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         
-        # Message queue for this stream
+        # Send initial connection event
+        self.wfile.write(b"event: connected\ndata: {\"status\": \"connected\"}\n\n")
+        self.wfile.flush()
+        
+        # Message queue for this stream (local to this connection)
         message_queue = deque(maxlen=100)
         stop_flag = threading.Event()
         
@@ -900,12 +991,18 @@ class CANServerHandler(BaseHTTPRequestHandler):
     
     def _handle_connect(self, data: dict):
         """Handle connect request."""
-        if self.can_manager.is_connected:
-            self._send_error("Already connected", 400)
-            return
-        
         channel = data.get("channel", 0)
         baudrate_str = data.get("baudrate", "BAUD_500K")
+        
+        # If already connected, just return success (multi-client support)
+        if self.can_manager.is_connected:
+            self._send_json({
+                "success": True,
+                "message": "Already connected to CAN bus",
+                "channel": channel,
+                "baudrate": baudrate_str
+            })
+            return
         
         # Parse baudrate
         try:
@@ -1197,7 +1294,7 @@ Examples:
         type=str,
         default="canable",
         choices=list(DRIVER_TYPES.keys()),
-        help="CAN driver to use (default: canable). Options: canable, waveshare"
+        help="CAN driver to use (default: canable). Options: canable, waveshare, pcan"
     )
     
     args = parser.parse_args()

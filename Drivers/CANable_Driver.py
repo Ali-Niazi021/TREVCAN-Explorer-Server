@@ -6,6 +6,36 @@ import sys
 import asyncio
 import inspect
 
+# =============================================================================
+# CRITICAL: Setup libusb DLL path BEFORE importing ANY usb/can modules
+# =============================================================================
+# On Windows, the libusb-1.0.dll must be loadable BEFORE pyusb imports.
+# If not set up in time, pyusb will fall back to libusb0 which has issues
+# with gs_usb devices like CANable.
+#
+# The gs_usb library uses `backend=libusb1.get_backend()` in its scan() method.
+# If libusb1.get_backend() returns None (because DLL wasn't found), it fails.
+# =============================================================================
+if sys.platform == 'win32':
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _project_dir = os.path.dirname(_script_dir)
+    _libusb_path = os.path.join(_project_dir, 'libusb-1.0.dll')
+    if os.path.exists(_libusb_path):
+        try:
+            os.add_dll_directory(_project_dir)
+        except AttributeError:
+            # Fallback for older Python versions
+            os.environ['PATH'] = _project_dir + os.pathsep + os.environ.get('PATH', '')
+        
+        # Force libusb1 to load now, before gs_usb caches None
+        try:
+            import usb.backend.libusb1 as _libusb1_early
+            _backend_check = _libusb1_early.get_backend()
+            if _backend_check is None:
+                print("⚠ Warning: libusb1 backend not available despite DLL present")
+        except Exception as _e:
+            print(f"⚠ Warning: Could not initialize libusb1: {_e}")
+
 from can import Bus, Message
 import usb.core
 import usb.util
@@ -59,21 +89,16 @@ class CANableDriver(BaseCANDriver):
         self._stop_receive: bool = False
         self._device_info: Optional[dict] = None
         
-        # Ensure libusb DLL is accessible on Windows
-        self._setup_libusb_path()
+        # Log libusb status (actual setup done at module load time)
+        self._log_libusb_status()
     
-    def _setup_libusb_path(self):
-        """Setup libusb DLL path for Windows."""
+    def _log_libusb_status(self):
+        """Log libusb DLL status for Windows."""
         if sys.platform == 'win32':
-            # Add current directory to DLL search path for libusb-1.0.dll
             script_dir = os.path.dirname(os.path.abspath(__file__))
             project_dir = os.path.dirname(script_dir)
-            
-            # Check if libusb-1.0.dll exists in project directory
             libusb_path = os.path.join(project_dir, 'libusb-1.0.dll')
             if os.path.exists(libusb_path):
-                # Add to PATH
-                os.environ['PATH'] = project_dir + os.pathsep + os.environ.get('PATH', '')
                 print(f"✓ Found libusb-1.0.dll at {libusb_path}")
             else:
                 print(f"⚠ Warning: libusb-1.0.dll not found at {libusb_path}")
@@ -191,9 +216,11 @@ class CANableDriver(BaseCANDriver):
                 try:
                     # Create bus instance using gs_usb interface (Candle API)
                     # This provides direct USB access to CANable with candleLight firmware
+                    # Note: 'index' is required for device selection, 'channel' is just a name
                     self._bus = Bus(
                         interface='gs_usb',
-                        channel=channel,  # Device index (0, 1, 2, ...)
+                        channel=f'can{channel}',  # Channel name (e.g., 'can0')
+                        index=channel,  # Device index for selection (0, 1, 2, ...)
                         bitrate=bitrate,
                         fd=fd_mode,
                         data_bitrate=bitrate if fd_mode else None
