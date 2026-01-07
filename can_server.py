@@ -308,16 +308,17 @@ class CANMessageJSON:
             "dlc": self.dlc
         }
         
+        # Always include raw data hex
+        result["data_hex"] = " ".join(f"{b:02X}" for b in self.data)
+        
         if decoded:
             # Decoded message - include name and signals
             result["message_name"] = decoded["message_name"]
             result["signals"] = decoded["signals"]
-            result["data_hex"] = None  # Not needed for decoded messages
         else:
-            # Unknown message - include raw data
+            # Unknown message - no DBC info available
             result["message_name"] = None
             result["signals"] = None
-            result["data_hex"] = " ".join(f"{b:02X}" for b in self.data)
         
         return result
     

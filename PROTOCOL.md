@@ -397,7 +397,7 @@ GET /api/messages?count=10&filter_id=192
       "signals": [
         {"name": "RPM", "value": 3124, "unit": "rpm"}
       ],
-      "data_hex": null
+      "data_hex": "34 0C 00 00 00 00 00 00"
     },
     {
       "id": 999,
@@ -421,7 +421,7 @@ GET /api/messages?count=10&filter_id=192
 | dlc | integer | Data length code |
 | message_name | string/null | DBC message name (null if unknown) |
 | signals | array/null | Decoded signals (null if unknown) |
-| data_hex | string/null | Raw hex data (null if decoded) |
+| data_hex | string | Raw hex data (always included) |
 
 **Signal Object:**
 | Field | Type | Description |
