@@ -799,23 +799,611 @@ curl -k -X POST https://localhost:8443/api/disconnect
 ```
 usage: can_server.py [-h] [--test] [--port PORT] [--host HOST] 
                      [--channel CHANNEL] [--baudrate BAUDRATE]
-                     [--no-ssl] [--cert CERT] [--key KEY] [--auto-connect]
+                     [--auto-connect] [--driver {canable,waveshare,pcan}]
+                     [--bluetooth] [--bt-channel BT_CHANNEL] [--bt-discoverable]
 
-CAN Bus HTTPS Server
+CAN Bus HTTP Server
 
 optional arguments:
   -h, --help            Show help message and exit
   --test, -t            Run in test mode with simulated CAN traffic
-  --port PORT, -p PORT  Server port (default: 8443)
+  --port PORT, -p PORT  Server port (default: 8080)
   --host HOST           Server host (default: 0.0.0.0)
   --channel CHANNEL, -c CHANNEL
                         CAN device channel/index (default: 0)
   --baudrate BAUDRATE, -b BAUDRATE
                         CAN baudrate in bps (default: 500000)
-  --no-ssl              Disable SSL/TLS (use HTTP instead of HTTPS)
-  --cert CERT           SSL certificate file (default: server.crt)
-  --key KEY             SSL private key file (default: server.key)
   --auto-connect        Automatically connect to CAN bus on startup
+  --driver, -d          CAN driver (canable, waveshare, pcan)
+  --bluetooth           Enable Bluetooth RFCOMM server
+  --bt-channel          Bluetooth RFCOMM channel (1-30, default: 1)
+  --bt-discoverable     Make adapter discoverable on startup
+```
+
+---
+
+## Bluetooth RFCOMM/SPP Protocol
+
+The server supports Bluetooth Serial Port Profile (SPP) for wireless communication. This allows clients to connect via Bluetooth and use the same functionality as the HTTP API.
+
+### Overview
+
+| Property | Value |
+|----------|-------|
+| Profile | Serial Port Profile (SPP) |
+| UUID | `00001101-0000-1000-8000-00805F9B34FB` |
+| Default Channel | 1 |
+| Service Name | `TREV-CAN-Server` |
+| Protocol | JSON over serial (newline-delimited) |
+
+### Server Requirements (Raspberry Pi)
+
+```bash
+# Install system packages
+sudo apt install bluetooth bluez libbluetooth-dev
+
+# Install Python package
+pip install pybluez
+
+# Enable and start Bluetooth service
+sudo systemctl enable bluetooth
+sudo systemctl start bluetooth
+```
+
+### Starting the Server with Bluetooth
+
+```bash
+# Enable Bluetooth server
+python can_server.py --bluetooth
+
+# Enable Bluetooth with discoverable mode
+python can_server.py --bluetooth --bt-discoverable
+
+# Bluetooth with specific channel
+python can_server.py --bluetooth --bt-channel 3
+
+# Full example with CAN
+python can_server.py --driver waveshare --bluetooth --bt-discoverable --auto-connect
+```
+
+---
+
+### Pairing Process
+
+Before a client can connect, it must be paired with the Raspberry Pi. This is a one-time process per device.
+
+#### Method 1: Using bluetoothctl (Recommended)
+
+On the Raspberry Pi:
+
+```bash
+# Start bluetoothctl
+bluetoothctl
+
+# Enable discovery and pairing
+[bluetooth]# power on
+[bluetooth]# discoverable on
+[bluetooth]# pairable on
+[bluetooth]# agent on
+[bluetooth]# default-agent
+
+# Wait for device to appear, then trust and pair
+# Replace XX:XX:XX:XX:XX:XX with client's MAC address
+[bluetooth]# pair XX:XX:XX:XX:XX:XX
+[bluetooth]# trust XX:XX:XX:XX:XX:XX
+
+# Exit
+[bluetooth]# quit
+```
+
+On the client (PC or Android):
+1. Open Bluetooth settings
+2. Scan for devices
+3. Find "raspberrypi" (or your Pi's hostname)
+4. Click to pair
+5. Accept pairing on both devices
+
+#### Method 2: From Android
+
+1. On Raspberry Pi, run `bluetoothctl` and enable discoverable mode
+2. On Android: Settings → Bluetooth → Scan
+3. Tap the Raspberry Pi device
+4. Accept pairing on the Pi: `[bluetooth]# yes`
+5. The devices are now paired
+
+#### Verify Pairing
+
+```bash
+# List paired devices
+bluetoothctl paired-devices
+
+# Should show:
+# Device XX:XX:XX:XX:XX:XX DeviceName
+```
+
+---
+
+### Bluetooth JSON Protocol
+
+The Bluetooth server uses newline-delimited JSON messages. Each command/response is a single JSON object followed by `\n`.
+
+#### Request Format
+
+```json
+{"cmd": "command_name", "params": {...}}
+```
+
+#### Response Format
+
+```json
+{"success": true, "data": {...}}
+```
+
+or
+
+```json
+{"success": false, "error": "Error message"}
+```
+
+---
+
+### Bluetooth Commands
+
+#### `ping` - Connection Test
+
+**Request:**
+```json
+{"cmd": "ping"}
+```
+
+**Response:**
+```json
+{"success": true, "pong": true, "timestamp": 1704556800.123}
+```
+
+---
+
+#### `get_status` - Server Status
+
+**Request:**
+```json
+{"cmd": "get_status"}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "status": {
+    "connected": true,
+    "mode": "hardware",
+    "buffer_size": 42,
+    "buffer_capacity": 5000,
+    "bluetooth_clients": 1,
+    "channel": 0,
+    "baudrate": "BAUD_500K",
+    "timestamp": 1704556800.123
+  }
+}
+```
+
+---
+
+#### `get_devices` - List CAN Devices
+
+**Request:**
+```json
+{"cmd": "get_devices"}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "mode": "hardware",
+  "devices": [
+    {"index": 0, "name": "can0", "description": "SocketCAN interface"}
+  ]
+}
+```
+
+---
+
+#### `connect` - Connect to CAN Bus
+
+**Request:**
+```json
+{"cmd": "connect", "params": {"channel": 0, "baudrate": "BAUD_500K"}}
+```
+
+**Response:**
+```json
+{"success": true, "message": "Connected to channel 0 at BAUD_500K"}
+```
+
+---
+
+#### `disconnect` - Disconnect from CAN Bus
+
+**Request:**
+```json
+{"cmd": "disconnect"}
+```
+
+**Response:**
+```json
+{"success": true, "message": "Disconnected from CAN bus"}
+```
+
+---
+
+#### `get_messages` - Get CAN Messages
+
+**Request:**
+```json
+{"cmd": "get_messages", "params": {"count": 50, "filter_id": 192}}
+```
+
+Parameters:
+- `count` (optional): Maximum messages to return (default: 100)
+- `filter_id` (optional): Filter by CAN ID
+
+**Response:**
+```json
+{
+  "success": true,
+  "count": 2,
+  "messages": [
+    {
+      "id": 192,
+      "id_hex": "0xC0",
+      "timestamp": 1704556800.123,
+      "dlc": 8,
+      "message_name": "EngineRPM",
+      "signals": [{"name": "RPM", "value": 3000, "unit": "rpm"}],
+      "data_hex": "B8 0B 00 00 00 00 00 00"
+    }
+  ]
+}
+```
+
+---
+
+#### `send_message` - Send CAN Message
+
+**Request:**
+```json
+{
+  "cmd": "send_message",
+  "params": {
+    "id": 291,
+    "data": [1, 2, 3, 4, 5, 6, 7, 8],
+    "extended": false
+  }
+}
+```
+
+Alternative data format (hex string):
+```json
+{"cmd": "send_message", "params": {"id": "0x123", "data": "01 02 03 04"}}
+```
+
+**Response:**
+```json
+{"success": true, "message": "Sent message 0x123 with 4 bytes"}
+```
+
+---
+
+#### `send_batch` - Send Multiple Messages
+
+**Request:**
+```json
+{
+  "cmd": "send_batch",
+  "params": {
+    "messages": [
+      {"id": 291, "data": [1, 2, 3, 4]},
+      {"id": 292, "data": [5, 6, 7, 8]}
+    ]
+  }
+}
+```
+
+**Response:**
+```json
+{"success": true, "sent": 2, "failed": 0}
+```
+
+---
+
+#### `clear_messages` - Clear Message Buffer
+
+**Request:**
+```json
+{"cmd": "clear_messages"}
+```
+
+**Response:**
+```json
+{"success": true, "message": "Message buffer cleared"}
+```
+
+---
+
+#### `load_dbc` - Load DBC File
+
+**Request:**
+```json
+{
+  "cmd": "load_dbc",
+  "params": {
+    "content": "VERSION \"\"\n\nNS_ :\n\nBS_:\n\nBU_:\n\nBO_ 192 EngineRPM: 8 Vector__XXX\n SG_ RPM : 0|16@1+ (1,0) [0|8000] \"rpm\" Vector__XXX"
+  }
+}
+```
+
+**Response:**
+```json
+{"success": true, "message": "DBC loaded successfully", "message_count": 1}
+```
+
+---
+
+#### `unload_dbc` - Unload DBC File
+
+**Request:**
+```json
+{"cmd": "unload_dbc"}
+```
+
+**Response:**
+```json
+{"success": true, "message": "DBC unloaded"}
+```
+
+---
+
+#### `subscribe` - Subscribe to Real-time Messages
+
+Start receiving streaming messages.
+
+**Request:**
+```json
+{"cmd": "subscribe"}
+```
+
+**Response:**
+```json
+{"success": true, "message": "Subscribed to message stream"}
+```
+
+After subscribing, you'll receive periodic message events:
+```json
+{
+  "event": "messages",
+  "count": 5,
+  "messages": [
+    {"id": 192, "id_hex": "0xC0", "data_hex": "...", ...},
+    ...
+  ]
+}
+```
+
+---
+
+#### `unsubscribe` - Stop Streaming
+
+**Request:**
+```json
+{"cmd": "unsubscribe"}
+```
+
+**Response:**
+```json
+{"success": true, "message": "Unsubscribed from message stream"}
+```
+
+---
+
+### Python Client Example
+
+```python
+from bluetooth_client_example import BluetoothCANClient
+
+# Create client
+client = BluetoothCANClient()
+
+# Discover servers
+services = client.discover_services()
+for svc in services:
+    print(f"{svc['name']} at {svc['address']}")
+
+# Connect
+client.connect("XX:XX:XX:XX:XX:XX", port=1)
+
+# Get status
+status = client.get_status()
+print(status)
+
+# Send a message
+client.send_message(0x123, [0x01, 0x02, 0x03, 0x04])
+
+# Get messages
+messages = client.get_messages(count=10)
+for msg in messages['messages']:
+    print(f"{msg['id_hex']}: {msg['data_hex']}")
+
+# Subscribe to streaming
+def on_message(response):
+    for msg in response['messages']:
+        print(f"Received: {msg['id_hex']}")
+
+client.set_message_callback(on_message)
+client.subscribe()
+
+# ... later
+client.unsubscribe()
+client.disconnect()
+```
+
+---
+
+### Android Integration (Kotlin)
+
+```kotlin
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothSocket
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.util.UUID
+
+class BluetoothCANClient {
+    private val SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+    private var socket: BluetoothSocket? = null
+    private var reader: BufferedReader? = null
+    private var writer: OutputStreamWriter? = null
+    
+    fun connect(device: BluetoothDevice): Boolean {
+        return try {
+            socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
+            socket?.connect()
+            reader = BufferedReader(InputStreamReader(socket?.inputStream))
+            writer = OutputStreamWriter(socket?.outputStream)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+    
+    fun disconnect() {
+        socket?.close()
+        socket = null
+    }
+    
+    fun sendCommand(cmd: String, params: Map<String, Any>? = null): String? {
+        val json = buildString {
+            append("{\"cmd\":\"$cmd\"")
+            if (params != null) {
+                append(",\"params\":")
+                append(JSONObject(params).toString())
+            }
+            append("}\n")
+        }
+        
+        writer?.write(json)
+        writer?.flush()
+        
+        return reader?.readLine()
+    }
+    
+    // High-level methods
+    fun getStatus() = sendCommand("get_status")
+    fun getMessages(count: Int = 100) = sendCommand("get_messages", mapOf("count" to count))
+    fun sendMessage(id: Int, data: List<Int>) = sendCommand("send_message", 
+        mapOf("id" to id, "data" to data))
+    fun subscribe() = sendCommand("subscribe")
+    fun unsubscribe() = sendCommand("unsubscribe")
+}
+
+// Usage
+val adapter = BluetoothAdapter.getDefaultAdapter()
+val device = adapter.bondedDevices.find { it.name == "raspberrypi" }
+
+device?.let {
+    val client = BluetoothCANClient()
+    if (client.connect(it)) {
+        val status = client.getStatus()
+        println(status)
+        
+        // Subscribe for streaming in a coroutine
+        client.subscribe()
+        
+        // Read messages in a loop
+        while (isActive) {
+            val line = reader.readLine()
+            // Parse JSON and handle messages
+        }
+        
+        client.disconnect()
+    }
+}
+```
+
+---
+
+### Android Integration (Java)
+
+```java
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothSocket;
+import org.json.JSONObject;
+import java.io.*;
+import java.util.UUID;
+
+public class BluetoothCANClient {
+    private static final UUID SPP_UUID = 
+        UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+    
+    private BluetoothSocket socket;
+    private BufferedReader reader;
+    private PrintWriter writer;
+    
+    public boolean connect(BluetoothDevice device) {
+        try {
+            socket = device.createRfcommSocketToServiceRecord(SPP_UUID);
+            socket.connect();
+            reader = new BufferedReader(
+                new InputStreamReader(socket.getInputStream()));
+            writer = new PrintWriter(
+                new OutputStreamWriter(socket.getOutputStream()), true);
+            return true;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+    
+    public void disconnect() {
+        try {
+            if (socket != null) socket.close();
+        } catch (IOException e) {}
+    }
+    
+    public String sendCommand(String cmd, JSONObject params) {
+        try {
+            JSONObject request = new JSONObject();
+            request.put("cmd", cmd);
+            if (params != null) request.put("params", params);
+            
+            writer.println(request.toString());
+            return reader.readLine();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    
+    public String getStatus() {
+        return sendCommand("get_status", null);
+    }
+    
+    public String getMessages(int count) throws Exception {
+        JSONObject params = new JSONObject();
+        params.put("count", count);
+        return sendCommand("get_messages", params);
+    }
+    
+    public String sendCANMessage(int id, int[] data) throws Exception {
+        JSONObject params = new JSONObject();
+        params.put("id", id);
+        params.put("data", new JSONArray(data));
+        return sendCommand("send_message", params);
+    }
+}
 ```
 
 ---
@@ -824,9 +1412,8 @@ optional arguments:
 
 ### Server Won't Start
 
-1. **Port in use**: Try a different port with `--port 8444`
-2. **SSL error**: Use `--no-ssl` or check certificate files
-3. **Missing dependencies**: Install with `pip install python-can pyusb`
+1. **Port in use**: Try a different port with `--port 8081`
+2. **Missing dependencies**: Install with `pip install python-can pyusb`
 
 ### Can't Connect to Hardware
 
@@ -842,9 +1429,17 @@ optional arguments:
 3. Check filter_id parameter isn't filtering out messages
 4. Increase buffer with more frequent polling
 
-### SSL Certificate Issues
+### Bluetooth Issues
 
-1. Client must accept self-signed certificates
-2. Use `verify=False` in Python requests
-3. Use `-k` flag with curl
-4. Or install certificate as trusted
+1. **"Bluetooth not available"**: Install pybluez and system packages
+2. **Connection refused**: Ensure devices are paired first
+3. **Device not found**: Make Pi discoverable with `--bt-discoverable`
+4. **Permission denied**: Run with sudo or add user to bluetooth group:
+   ```bash
+   sudo usermod -a -G bluetooth $USER
+   ```
+5. **Pairing fails**: Remove and re-pair:
+   ```bash
+   bluetoothctl remove XX:XX:XX:XX:XX:XX
+   bluetoothctl pair XX:XX:XX:XX:XX:XX
+   ```

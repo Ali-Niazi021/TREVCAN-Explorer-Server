@@ -39,3 +39,18 @@ pyusb>=1.2.0               # USB communication for CANable/gs_usb devices
 #   - PCAN Basic API drivers installed
 #   - On Windows: PCAN-Basic API DLL (included with PEAK drivers)
 #   - On Linux: PCAN driver module (peak-linux-driver)
+
+# -----------------------------------------------------------------------------
+# Bluetooth Server Dependencies (Optional - Raspberry Pi)
+# -----------------------------------------------------------------------------
+# pybluez has compatibility issues with newer Python. Install from git:
+#   pip install git+https://github.com/pybluez/pybluez.git
+#
+# System packages required (Raspberry Pi / Debian / Ubuntu):
+#   sudo apt install bluetooth bluez libbluetooth-dev
+#
+# Enable Bluetooth service:
+#   sudo systemctl enable bluetooth
+#   sudo systemctl start bluetooth
+#
+# For pairing, see PROTOCOL.md Bluetooth section

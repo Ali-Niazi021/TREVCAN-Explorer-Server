@@ -22,6 +22,12 @@ from Drivers.CANable_Driver import CANableDriver
 from Drivers.PiWaveshare2ChCAN_Driver import PiWaveshare2ChCAN_Driver
 from Drivers.PCAN_Driver import PCANDriver
 
+# Bluetooth support (optional)
+try:
+    from bluetooth_server import BluetoothCANServer, get_bluetooth_info, make_discoverable, BLUETOOTH_AVAILABLE
+except ImportError:
+    BLUETOOTH_AVAILABLE = False
+
 # Available driver types
 DRIVER_TYPES = {
     'canable': CANableDriver,
@@ -1298,6 +1304,26 @@ Examples:
         help="CAN driver to use (default: canable). Options: canable, waveshare, pcan"
     )
     
+    # Bluetooth options
+    parser.add_argument(
+        "--bluetooth",
+        action="store_true",
+        help="Enable Bluetooth RFCOMM/SPP server (requires pybluez)"
+    )
+    
+    parser.add_argument(
+        "--bt-channel",
+        type=int,
+        default=1,
+        help="Bluetooth RFCOMM channel (1-30, default: 1)"
+    )
+    
+    parser.add_argument(
+        "--bt-discoverable",
+        action="store_true",
+        help="Make Bluetooth adapter discoverable on startup"
+    )
+    
     args = parser.parse_args()
     
     # Create CAN bus manager with selected driver
@@ -1322,27 +1348,52 @@ Examples:
             print("⚠ Auto-connect failed, server starting anyway")
             print("  Use POST /api/connect to connect manually")
     
-    # Create server
+    # Create HTTP server
     server_address = (args.host, args.port)
     httpd = ThreadedHTTPServer(server_address, CANServerHandler)
     
     # Get local IP address
     local_ip = get_local_ip()
     
+    # Initialize Bluetooth server if requested
+    bt_server = None
+    if args.bluetooth:
+        if not BLUETOOTH_AVAILABLE:
+            print("⚠ Bluetooth requested but pybluez not installed")
+            print("  Install with: pip install pybluez")
+            print("  Also: sudo apt install bluetooth bluez libbluetooth-dev")
+        else:
+            bt_info = get_bluetooth_info()
+            if bt_info.get("available"):
+                bt_server = BluetoothCANServer(can_manager, dbc_manager, message_buffer)
+                
+                # Make discoverable if requested
+                if args.bt_discoverable:
+                    make_discoverable(timeout=0)
+                
+                if not bt_server.start(channel=args.bt_channel):
+                    print("⚠ Bluetooth server failed to start")
+                    bt_server = None
+            else:
+                print(f"⚠ Bluetooth not available: {bt_info.get('error', 'Unknown error')}")
+    
     # Print startup info
     print("\n" + "=" * 60)
     print("CAN Bus HTTP Server")
     print("=" * 60)
     print(f"  Mode:     {'TEST (simulated)' if args.test else 'HARDWARE'}")
-    print(f"  URL:      http://{args.host}:{args.port}/")
+    print(f"  HTTP:     http://{args.host}:{args.port}/")
     print(f"  Local IP: http://{local_ip}:{args.port}/")
+    
+    if bt_server:
+        print(f"  Bluetooth: {bt_server.local_address} (RFCOMM ch {args.bt_channel})")
     
     if not args.test:
         print(f"  Channel:  {args.channel}")
         print(f"  Baudrate: {args.baudrate} bps")
     
     print("=" * 60)
-    print("\nAPI Endpoints:")
+    print("\nHTTP API Endpoints:")
     print("  GET  /                  - API info")
     print("  GET  /api/status        - Server status")
     print("  GET  /api/devices       - List CAN devices")
@@ -1353,6 +1404,13 @@ Examples:
     print("  POST /api/messages      - Send a CAN message")
     print("  POST /api/messages/batch - Send multiple messages")
     print("  DELETE /api/messages    - Clear message buffer")
+    
+    if bt_server:
+        print("\nBluetooth Commands (JSON over RFCOMM):")
+        print("  get_status, get_devices, connect, disconnect")
+        print("  get_messages, send_message, send_batch, clear_messages")
+        print("  load_dbc, unload_dbc, subscribe, unsubscribe")
+    
     print("\nPress Ctrl+C to stop the server")
     print("=" * 60 + "\n")
     
@@ -1361,6 +1419,10 @@ Examples:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\n\nShutting down server...")
+        
+        # Stop Bluetooth server
+        if bt_server:
+            bt_server.stop()
         
         # Disconnect CAN bus
         if can_manager.is_connected:
