@@ -121,6 +121,30 @@ class BluetoothCANServer:
         self._port = 1  # RFCOMM channel (1-30)
         self._local_address: Optional[str] = None
     
+    def _get_local_address(self) -> str:
+        """Get local Bluetooth address using hciconfig."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["hciconfig", "hci0"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            for line in result.stdout.split('\n'):
+                if "BD Address:" in line:
+                    parts = line.split("BD Address:")[1].split()
+                    if parts:
+                        return parts[0].strip()
+        except:
+            pass
+        
+        # Fallback to pybluez (may fail on some systems)
+        try:
+            return bluetooth.read_local_bdaddr()[0]
+        except:
+            return "00:00:00:00:00:00"
+    
     @property
     def is_running(self) -> bool:
         """Check if server is running."""
@@ -158,18 +182,23 @@ class BluetoothCANServer:
             self._server_socket.bind(("", self._port))
             self._server_socket.listen(5)  # Max 5 pending connections
             
-            # Get local address
-            self._local_address = bluetooth.read_local_bdaddr()[0]
+            # Get local address using hciconfig (more reliable)
+            self._local_address = self._get_local_address()
             
-            # Advertise SPP service
-            bluetooth.advertise_service(
-                self._server_socket,
-                SERVICE_NAME,
-                service_id=SPP_UUID,
-                service_classes=[SPP_UUID, bluetooth.SERIAL_PORT_CLASS],
-                profiles=[bluetooth.SERIAL_PORT_PROFILE],
-                description=SERVICE_DESCRIPTION
-            )
+            # Try to advertise SPP service (optional - may fail if SDP not available)
+            try:
+                bluetooth.advertise_service(
+                    self._server_socket,
+                    SERVICE_NAME,
+                    service_id=SPP_UUID,
+                    service_classes=[SPP_UUID, bluetooth.SERIAL_PORT_CLASS],
+                    profiles=[bluetooth.SERIAL_PORT_PROFILE],
+                    description=SERVICE_DESCRIPTION
+                )
+                print("  ✓ SDP service registered")
+            except Exception as e:
+                print(f"  ⚠ SDP not available ({e})")
+                print("    Clients can still connect directly by address and channel")
             
             self._running = True
             
@@ -662,31 +691,52 @@ def get_bluetooth_info() -> dict:
         return {"available": False, "error": "Bluetooth module not installed"}
     
     try:
-        # Get local address
-        local_addr = bluetooth.read_local_bdaddr()[0]
+        import subprocess
         
-        # Get adapter name
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["hciconfig", "hci0", "name"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            name = "Unknown"
-            for line in result.stdout.split('\n'):
-                if "Name:" in line:
-                    name = line.split("Name:")[1].strip().strip("'")
-                    break
-        except:
-            name = "Unknown"
+        # Use hciconfig to get adapter info (more reliable than pybluez)
+        result = subprocess.run(
+            ["hciconfig", "hci0"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode != 0:
+            return {"available": False, "error": "No Bluetooth adapter found"}
+        
+        output = result.stdout
+        
+        # Check if adapter is UP
+        if "UP RUNNING" not in output:
+            # Try to bring it up
+            subprocess.run(["sudo", "hciconfig", "hci0", "up"], timeout=5)
+            result = subprocess.run(["hciconfig", "hci0"], capture_output=True, text=True, timeout=5)
+            output = result.stdout
+            
+            if "UP RUNNING" not in output:
+                return {"available": False, "error": "Bluetooth adapter is down"}
+        
+        # Parse BD Address
+        local_addr = None
+        name = "Unknown"
+        for line in output.split('\n'):
+            if "BD Address:" in line:
+                parts = line.split("BD Address:")[1].split()
+                if parts:
+                    local_addr = parts[0].strip()
+            if "Name:" in line:
+                name = line.split("Name:")[1].strip().strip("'")
+        
+        if not local_addr:
+            return {"available": False, "error": "Could not get Bluetooth address"}
         
         return {
             "available": True,
             "address": local_addr,
             "name": name
         }
+    except FileNotFoundError:
+        return {"available": False, "error": "hciconfig not found - install bluez"}
     except Exception as e:
         return {"available": False, "error": str(e)}
 

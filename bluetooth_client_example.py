@@ -144,7 +144,32 @@ class BluetoothCANClient:
             
             self._socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
             self._socket.settimeout(timeout)
-            self._socket.connect((address, port))
+            
+            # Windows requires different connection approach
+            if sys.platform == 'win32':
+                # On Windows, try using the service UUID lookup
+                try:
+                    # Find services on the device
+                    services = bluetooth.find_service(
+                        uuid="00001101-0000-1000-8000-00805F9B34FB",
+                        address=address
+                    )
+                    if services:
+                        service = services[0]
+                        host = service["host"]
+                        port = service["port"]
+                        print(f"  Found SPP service on port {port}")
+                        self._socket.connect((host, port))
+                    else:
+                        # Fallback: connect directly
+                        self._socket.connect((address, port))
+                except Exception as e:
+                    print(f"  Service lookup failed: {e}")
+                    # Try direct connection with tuple format
+                    self._socket.connect((address, port))
+            else:
+                # Linux/Mac: direct connection works
+                self._socket.connect((address, port))
             
             self._address = address
             self._connected = True
